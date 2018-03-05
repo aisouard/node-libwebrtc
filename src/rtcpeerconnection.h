@@ -20,27 +20,34 @@
 #include <nan.h>
 #include <webrtc/api/jsep.h>
 #include <string>
+#include "eventemitter.h"
 
 using namespace v8;
 
 class PeerConnectionObserver;
-class RTCPeerConnection : public Nan::ObjectWrap {
+class RTCPeerConnection : public EventEmitter {
  public:
   static NAN_MODULE_INIT(Init);
 
  private:
   explicit RTCPeerConnection(
-      const webrtc::PeerConnectionInterface::RTCConfiguration& config,
-      const webrtc::MediaConstraintsInterface& constraints);
+      const webrtc::PeerConnectionInterface::RTCConfiguration& config);
   ~RTCPeerConnection();
 
   static NAN_METHOD(New);
   static NAN_METHOD(CreateOffer);
+  static NAN_METHOD(CreateAnswer);
+  static NAN_METHOD(SetLocalDescription);
+  static NAN_METHOD(SetRemoteDescription);
+  static NAN_METHOD(CreateDataChannel);
   static NAN_METHOD(GenerateCertificate);
+  static NAN_METHOD(AddStream);
 
   static NAN_GETTER(GetConnectionState);
   static NAN_GETTER(GetCurrentLocalDescription);
   static NAN_GETTER(GetCurrentRemoteDescription);
+  static NAN_GETTER(GetLocalDescription);
+  static NAN_GETTER(GetRemoteDescription);
   static NAN_GETTER(GetIceConnectionState);
   static NAN_GETTER(GetIceGatheringState);
   static NAN_GETTER(GetPendingLocalDescription);

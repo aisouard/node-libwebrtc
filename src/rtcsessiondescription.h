@@ -42,18 +42,19 @@ class RTCSessionDescription : public Nan::ObjectWrap {
   static const char kPranswer[];
   static const char kRollback[];
 
+  webrtc::SessionDescriptionInterface* session_description();
+
  private:
   explicit RTCSessionDescription(
-      webrtc::SessionDescriptionInterface *sessionDescription);
+      webrtc::SessionDescriptionInterface* sessionDescription);
   ~RTCSessionDescription();
+
+  webrtc::SessionDescriptionInterface* _sessionDescription;
 
   static NAN_METHOD(New);
 
   static NAN_GETTER(GetType);
   static NAN_GETTER(GetSdp);
-
- protected:
-  webrtc::SessionDescriptionInterface *_sessionDescription;
 };
 
 #endif  // RTCSESSIONDESCRIPTION_H_

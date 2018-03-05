@@ -14,41 +14,46 @@
  * limitations under the License.
  */
 
-#ifndef RTCCERTIFICATE_H_
-#define RTCCERTIFICATE_H_
+#ifndef RTCMEDIASTREAM_H_
+#define RTCMEDIASTREAM_H_
 
 #include <nan.h>
 #include <webrtc/api/jsep.h>
 #include <string>
+#include "eventemitter.h"
 
 using namespace v8;
 
-class RTCCertificate : public Nan::ObjectWrap {
+class RTCMediaStream : public EventEmitter {
  public:
   static NAN_MODULE_INIT(Init);
 
-  static NAN_GETTER(GetExpires);
-  static NAN_GETTER(GetFingerprints);
+  // static NAN_GETTER(GetLabel);
+  // static NAN_GETTER(GetOrdered);
+  // static NAN_GETTER(GetReadyState);
 
-  static NAN_METHOD(ToPEM);
-  static NAN_METHOD(FromPEM);
+  // static NAN_METHOD(Send);
+  // static NAN_METHOD(Close);
 
   static Local<Object> Create(
-      const rtc::scoped_refptr<rtc::RTCCertificate>& certificate);
+    const rtc::scoped_refptr<webrtc::MediaStreamInterface>& mediastream);
 
   static inline Nan::Persistent<v8::Function>& constructor() {
     static Nan::Persistent<v8::Function> _constructor;
     return _constructor;
   }
 
-  const rtc::scoped_refptr<rtc::RTCCertificate> _certificate;
+  const rtc::scoped_refptr<webrtc::MediaStreamInterface> _mediastream;
 
  private:
-  explicit RTCCertificate(
-    const rtc::scoped_refptr<rtc::RTCCertificate>& certificate);
-  ~RTCCertificate();
+  explicit RTCMediaStream(
+    const rtc::scoped_refptr<webrtc::MediaStreamInterface>& mediastream);
+  ~RTCMediaStream();
 
   static NAN_METHOD(New);
+
+ protected:
+ // rtc::scoped_refptr<DataChannelObserver> _datachannelObserver;
 };
 
-#endif  // RTCCERTIFICATE_H_
+#endif  // RTCMEDIASTREAM_H_

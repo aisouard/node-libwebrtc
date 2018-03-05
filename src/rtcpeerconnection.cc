@@ -21,16 +21,29 @@
 #include "common.h"
 #include "globals.h"
 #include "observer/createsessiondescriptionobserver.h"
+#include "observer/setsessiondescriptionobserver.h"
 #include "observer/peerconnectionobserver.h"
 #include "rtccertificate.h"
 #include "rtcpeerconnection.h"
+#include "rtcsessiondescription.h"
+#include "rtcdatachannel.h"
+#include "rtcmediastream.h"
 
 Nan::Persistent<FunctionTemplate> RTCPeerConnection::constructor;
 
 static const char sRTCPeerConnection[] = "RTCPeerConnection";
 
 static const char kCreateOffer[] = "createOffer";
+static const char kCreateAnswer[] = "createAnswer";
+static const char kSetLocalDescription[] = "setLocalDescription";
+static const char kSetRemoteDescription[] = "setRemoteDescription";
+static const char kCreateDataChannel[] = "createDataChannel";
+static const char kAddStream[] = "addStream";
 static const char kGenerateCertificate[] = "generateCertificate";
+
+static const char kIceServers[] = "iceServers";
+static const char kIceServerUrls[] = "urls";
+static const char kCertificates[] = "certificates";
 
 static const char kName[] = "name";
 static const char kRSA[] = "RSASSA-PKCS1-v1_5";
@@ -45,6 +58,8 @@ static const char kP256[] = "P-256";
 static const char kConnectionState[] = "connectionState";
 static const char kCurrentLocalDescription[] = "currentLocalDescription";
 static const char kCurrentRemoteDescription[] = "currentRemoteDescription";
+static const char kLocalDescription[] = "localDescription";
+static const char kRemoteDescription[] = "remoteDescription";
 static const char kIceConnectionState[] = "iceConnectionState";
 static const char kIceGatheringState[] = "iceGatheringState";
 static const char kPendingLocalDescription[] = "pendingLocalDescription";
@@ -75,7 +90,10 @@ static const char eUnsupported[] = "The 1st argument provided is an "
     "AlgorithmIdentifier with a supported algorithm name, but the parameters "
     "are not supported.";
 
-static const char eFailure[] = "Failed to generate the certificate.";
+static const char eGenerateCertificateFailure[] = 
+    "Failed to generate the certificate.";
+static const char eConstructorFailure[] =
+    "Failed to construct 'RTCPeerConnection'";
 
 NAN_MODULE_INIT(RTCPeerConnection::Init) {
   Local<FunctionTemplate> ctor = Nan::New<FunctionTemplate>(New);
@@ -86,6 +104,11 @@ NAN_MODULE_INIT(RTCPeerConnection::Init) {
 
   Local<ObjectTemplate> prototype = ctor->InstanceTemplate();
   Nan::SetMethod(prototype, kCreateOffer, CreateOffer);
+  Nan::SetMethod(prototype, kCreateAnswer, CreateAnswer);
+  Nan::SetMethod(prototype, kSetLocalDescription, SetLocalDescription);
+  Nan::SetMethod(prototype, kSetRemoteDescription, SetRemoteDescription);
+  Nan::SetMethod(prototype, kCreateDataChannel, CreateDataChannel);
+  Nan::SetMethod(prototype, kAddStream, AddStream);
 
   Local<ObjectTemplate> tpl = ctor->InstanceTemplate();
   Nan::SetAccessor(tpl, LOCAL_STRING(kConnectionState),
@@ -94,6 +117,10 @@ NAN_MODULE_INIT(RTCPeerConnection::Init) {
                    GetCurrentLocalDescription);
   Nan::SetAccessor(tpl, LOCAL_STRING(kCurrentRemoteDescription),
                    GetCurrentRemoteDescription);
+  Nan::SetAccessor(tpl, LOCAL_STRING(kLocalDescription),
+                   GetLocalDescription);
+  Nan::SetAccessor(tpl, LOCAL_STRING(kRemoteDescription),
+                   GetRemoteDescription);
   Nan::SetAccessor(tpl, LOCAL_STRING(kIceConnectionState),
                    GetIceConnectionState);
   Nan::SetAccessor(tpl, LOCAL_STRING(kIceGatheringState),
@@ -110,8 +137,7 @@ NAN_MODULE_INIT(RTCPeerConnection::Init) {
 }
 
 RTCPeerConnection::RTCPeerConnection(
-    const webrtc::PeerConnectionInterface::RTCConfiguration& config,
-    const webrtc::MediaConstraintsInterface& constraints) {
+    const webrtc::PeerConnectionInterface::RTCConfiguration& config) {
 
   _peerConnectionFactory = webrtc::CreatePeerConnectionFactory(
       Globals::GetSignalingThread(), Globals::GetWorkerThread(),
@@ -119,8 +145,7 @@ RTCPeerConnection::RTCPeerConnection(
 
   _peerConnectionObserver = PeerConnectionObserver::Create();
   _peerConnection = _peerConnectionFactory->CreatePeerConnection(
-          config, &constraints, NULL, NULL, _peerConnectionObserver);
-  _peerConnectionObserver->SetPeerConnection(_peerConnection);
+          config, NULL, NULL, _peerConnectionObserver);
 }
 
 RTCPeerConnection::~RTCPeerConnection() {
@@ -130,18 +155,65 @@ RTCPeerConnection::~RTCPeerConnection() {
 }
 
 NAN_METHOD(RTCPeerConnection::New) {
+  CONSTRUCTOR_HEADER("RTCPeerConnection")
   webrtc::FakeConstraints constraints;
-  webrtc::PeerConnectionInterface::RTCConfiguration config;
-  webrtc::PeerConnectionInterface::IceServer server;
-  server.uri = "stun:stun.l.google.com:19302";
-  config.servers.push_back(server);
+  webrtc::PeerConnectionInterface::RTCConfiguration _config;
 
-  constraints.AddOptional(webrtc::MediaConstraintsInterface::kEnableDtlsSrtp,
-                          "true");
+  if (info.Length() > 0) {
+    ASSERT_OBJECT_ARGUMENT(0, config);
 
-  RTCPeerConnection *rtcPeerConnection = new RTCPeerConnection(config,
-                                                               constraints);
+    DECLARE_OBJECT_PROPERTY(config, kIceServers, iceServersVal);
+
+    if (!iceServersVal->IsNull() && !iceServersVal->IsUndefined()) {
+      ASSERT_PROPERTY_ARRAY(kIceServers, iceServersVal, iceServers);
+
+      for (unsigned int i = 0; i < iceServers->Length(); i = i + 1) {
+        Local<Value> iceServerVal = iceServers->Get(i);
+        ASSERT_PROPERTY_OBJECT(kIceServers, iceServerVal, iceServer);
+
+        webrtc::PeerConnectionInterface::IceServer server;
+
+        DECLARE_OBJECT_PROPERTY(iceServer, kIceServerUrls, iceServerUrlsVal);
+        ASSERT_PROPERTY_ARRAY(kIceServerUrls, iceServerUrlsVal, iceServerUrls);
+
+        for (unsigned int j = 0; j < iceServerUrls->Length(); j = j + 1) {
+          Local<Value> iceServerUrlVal = iceServerUrls->Get(j);
+          // FIXME: validate URL
+          ASSERT_PROPERTY_STRING(kIceServerUrls, iceServerUrlVal, iceServerUrl);
+          server.urls.push_back(*iceServerUrl);
+          // FIXME: add username / password for TURN servers
+        }
+        _config.servers.push_back(server);
+      }
+    }
+
+    DECLARE_OBJECT_PROPERTY(config, kCertificates, certificatesVal);
+
+    if (!certificatesVal->IsNull() && !certificatesVal->IsUndefined()) {
+      ASSERT_PROPERTY_ARRAY(kCertificates, certificatesVal, certificates);
+
+      for (unsigned int i = 0; i < certificates->Length(); i = i + 1) {
+        Local<Value> certificateVal = certificates->Get(i);
+        ASSERT_PROPERTY_OBJECT(kCertificates, certificateVal, certificate);
+        // FIXME: validate it's a RTCCertificate object
+        RTCCertificate* _certificate
+          = Nan::ObjectWrap::Unwrap<RTCCertificate>(certificate);
+
+        _config.certificates.push_back(_certificate->_certificate);
+      }
+    }
+  }
+
+  RTCPeerConnection *rtcPeerConnection = new RTCPeerConnection(_config);
+
+  if (!rtcPeerConnection->_peerConnection) {
+    return Nan::ThrowError(eConstructorFailure);
+  }
+
   rtcPeerConnection->Wrap(info.This());
+
+  rtcPeerConnection->_peerConnectionObserver->SetEventEmitter(
+    rtcPeerConnection);
 
   info.GetReturnValue().Set(info.This());
 }
@@ -189,12 +261,158 @@ NAN_METHOD(RTCPeerConnection::CreateOffer) {
   object->_peerConnection->CreateOffer(observer, &constraints);
 }
 
+NAN_METHOD(RTCPeerConnection::CreateAnswer) {
+  METHOD_HEADER("RTCPeerConnection", "createAnswer");
+  UNWRAP_OBJECT(RTCPeerConnection, object);
+
+  unsigned char start = 0;
+  rtc::scoped_refptr<webrtc::CreateSessionDescriptionObserver> observer;
+
+  if (info.Length() < 2) {
+    DECLARE_PROMISE_RESOLVER;
+
+    observer = CreateSessionDescriptionObserver::Create(
+        new Nan::Persistent<Promise::Resolver>(resolver));
+  } else if (info.Length() > 1) {
+    if (info.Length() > 2) {
+      start = 1;
+    }
+
+    ASSERT_FUNCTION_ARGUMENT(start, successCallback);
+    ASSERT_FUNCTION_ARGUMENT(start + 1, failureCallback);
+
+    observer = CreateSessionDescriptionObserver::Create(
+        new Nan::Persistent<Function>(successCallback),
+        new Nan::Persistent<Function>(failureCallback));
+  }
+
+  webrtc::FakeConstraints constraints;
+  object->_peerConnection->CreateAnswer(observer, &constraints);
+}
+
+// FIXME: factorize SetLocalDescription and SetRemoteDescription
+
+NAN_METHOD(RTCPeerConnection::SetLocalDescription) {
+  METHOD_HEADER("RTCPeerConnection", "setLocalDescription");
+  UNWRAP_OBJECT(RTCPeerConnection, object);
+
+  rtc::scoped_refptr<webrtc::SetSessionDescriptionObserver> observer;
+
+  // FIXME: Promise implementation only
+  DECLARE_PROMISE_RESOLVER;
+  ASSERT_REJECT_OBJECT_ARGUMENT(0, sessionDescription);
+
+  // FIXME: validate it's a RTCSessionDescription object
+  RTCSessionDescription* _sessionDescription;
+  _sessionDescription = Nan::ObjectWrap::Unwrap<RTCSessionDescription>(
+    sessionDescription);
+
+  observer = SetSessionDescriptionObserver::Create(
+    new Nan::Persistent<Promise::Resolver>(resolver));
+
+  object->_peerConnection->SetLocalDescription(observer,
+    _sessionDescription->session_description());
+}
+
+NAN_METHOD(RTCPeerConnection::SetRemoteDescription) {
+  METHOD_HEADER("RTCPeerConnection", "setRemoteDescription");
+  UNWRAP_OBJECT(RTCPeerConnection, object);
+
+  rtc::scoped_refptr<webrtc::SetSessionDescriptionObserver> observer;
+
+  // FIXME: Promise implementation only
+  DECLARE_PROMISE_RESOLVER;
+  ASSERT_REJECT_OBJECT_ARGUMENT(0, sessionDescription);
+
+  // FIXME: validate it's a RTCSessionDescription object
+  RTCSessionDescription* _sessionDescription;
+  _sessionDescription = Nan::ObjectWrap::Unwrap<RTCSessionDescription>(
+    sessionDescription);
+
+  observer = SetSessionDescriptionObserver::Create(
+    new Nan::Persistent<Promise::Resolver>(resolver));
+
+  object->_peerConnection->SetRemoteDescription(observer,
+    _sessionDescription->session_description());
+}
+
+NAN_METHOD(RTCPeerConnection::CreateDataChannel) {
+  METHOD_HEADER("RTCPeerConnection", "createDataChannel");
+  UNWRAP_OBJECT(RTCPeerConnection, object);
+
+  ASSERT_STRING_ARGUMENT(0, name);
+
+  // FIXME: add init options
+  const webrtc::DataChannelInit init;
+
+  rtc::scoped_refptr<webrtc::DataChannelInterface> _channel
+    = object->_peerConnection->CreateDataChannel(*name, &init);
+
+  Local<Object> datachannel = RTCDataChannel::Create(_channel);
+
+  info.GetReturnValue().Set(datachannel);
+}
+
+NAN_METHOD(RTCPeerConnection::AddStream) {
+  METHOD_HEADER("RTCPeerConnection", "addStream");
+  UNWRAP_OBJECT(RTCPeerConnection, object);
+
+  ASSERT_OBJECT_ARGUMENT(0, stream);
+
+  // FIXME: validate...
+  RTCMediaStream* _stream = Nan::ObjectWrap::Unwrap<RTCMediaStream>(
+    stream);
+
+  std::cout << "ADDING STREAM" << std::endl;
+  bool ok = object->_peerConnection->AddStream(_stream->_mediastream);
+  if(ok) {
+    std::cout << "stream added" << std::endl;
+  }else{
+    std::cout << "stream NOT added" << std::endl;
+  }
+
+  info.GetReturnValue().Set(Nan::Null());
+}
+
 NAN_GETTER(RTCPeerConnection::GetConnectionState) {
+  // FIXME: implement
   info.GetReturnValue().Set(LOCAL_STRING("new"));
 }
 
 NAN_GETTER(RTCPeerConnection::GetCurrentLocalDescription) {
   info.GetReturnValue().Set(Nan::Null());
+}
+
+NAN_GETTER(RTCPeerConnection::GetLocalDescription) {
+  METHOD_HEADER("RTCPeerConnection", "getLocalDescription");
+  UNWRAP_OBJECT(RTCPeerConnection, object);
+
+  const webrtc::SessionDescriptionInterface *session
+    = object->_peerConnection->local_description();
+
+  const std::string type = session->type();
+  std::string sdp;
+  session->ToString(&sdp);
+
+  Local<Object> desc = RTCSessionDescription::Create(type, sdp);
+
+  info.GetReturnValue().Set(desc);
+}
+
+NAN_GETTER(RTCPeerConnection::GetRemoteDescription) {
+  METHOD_HEADER("RTCPeerConnection", "getRemoteDescription");
+  UNWRAP_OBJECT(RTCPeerConnection, object);
+
+  const webrtc::SessionDescriptionInterface *session
+    = object->_peerConnection->remote_description();
+
+  const std::string type = session->type();
+  std::string sdp;
+  session->ToString(&sdp);
+
+  Local<Object> desc = RTCSessionDescription::Create(type, sdp);
+
+  info.GetReturnValue().Set(desc);
 }
 
 NAN_GETTER(RTCPeerConnection::GetCurrentRemoteDescription) {
@@ -336,7 +554,7 @@ void RTCPeerConnection::GenerateCertificateWorker::WorkComplete() {
   if (!_certificate.get()) {
     std::stringstream errorStream;
 
-    errorStream << eFailure;
+    errorStream << eGenerateCertificateFailure;
     resolver->Reject(Nan::TypeError(errorStream.str().c_str()));
   } else {
     resolver->Resolve(RTCCertificate::Create(_certificate));
